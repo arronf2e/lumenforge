@@ -424,10 +424,12 @@ function resolveMutation(name: string, args: Args, errors: string[]): unknown {
         errors.push('closeIssue: issue not found');
         return null;
       }
+      const repo = target._repo as Repo;
       const issue = target._issue as Issue;
       issue.state = 'closed';
       issue.updatedSec = tick();
-      return { __typename: 'CloseIssuePayload', issue: target, clientMutationId: input.clientMutationId ?? null };
+      // Rebuild the entity: its state field is a snapshot taken when it was minted.
+      return { __typename: 'CloseIssuePayload', issue: issueEntity(repo, issue), clientMutationId: input.clientMutationId ?? null };
     }
     case 'createPullRequest': {
       const repo = typeof input.repositoryId === 'string' ? repoByGlobalId(input.repositoryId) : undefined;
