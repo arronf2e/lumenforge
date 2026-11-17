@@ -20,11 +20,11 @@ import {
 const SCOPES = 'repo, read:org';
 const NOT_FOUND = { message: 'Not Found' };
 
-function userJson(): Record<string, unknown> {
+export function userJson(): Record<string, unknown> {
   return { login: VIEWER.login, id: VIEWER.id, name: VIEWER.name, type: 'User' };
 }
 
-function repoJson(repo: Repo): Record<string, unknown> {
+export function repoJson(repo: Repo): Record<string, unknown> {
   return {
     id: repo.id,
     name: repo.name,
@@ -44,7 +44,7 @@ function labelJson(name: string, color: string): Record<string, unknown> {
   return { name, color, description: null, default: false };
 }
 
-function issueJson(repo: Repo, issue: Issue): Record<string, unknown> {
+export function issueJson(repo: Repo, issue: Issue): Record<string, unknown> {
   const body: Record<string, unknown> = {
     id: issue.id,
     number: issue.number,
@@ -63,7 +63,7 @@ function issueJson(repo: Repo, issue: Issue): Record<string, unknown> {
   return body;
 }
 
-function pullJson(repo: Repo, pull: Pull): Record<string, unknown> {
+export function pullJson(repo: Repo, pull: Pull): Record<string, unknown> {
   const headSha = branchTip(repo, pull.headRef) ?? '';
   const baseSha = branchTip(repo, pull.baseRef) ?? '';
   return {
