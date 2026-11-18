@@ -221,7 +221,29 @@ function treeClosure(commitSha: string, into: Set<string>): void {
  * the client's shallow commits are treated as parentless (it holds them, but not
  * their history), which is what makes deepen arithmetic come out right.
  */
+const freshPlanCache = new Map<string, FetchPlan>();
+
 function planFetch(
+  wants: string[],
+  haves: string[],
+  shallowClient: string[],
+  depth: number | null,
+): FetchPlan {
+  // A fresh fetch (no haves, no shallow boundary) plans purely from the object
+  // graph, which is append-only: the same wants+depth always plan the same pack.
+  const cacheKey = haves.length === 0 && shallowClient.length === 0
+    ? `${wants.join(',')}#${depth ?? ''}`
+    : null;
+  if (cacheKey !== null) {
+    const cached = freshPlanCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+  }
+  const plan = planFetchUncached(wants, haves, shallowClient, depth);
+  if (cacheKey !== null) freshPlanCache.set(cacheKey, plan);
+  return plan;
+}
+
+function planFetchUncached(
   wants: string[],
   haves: string[],
   shallowClient: string[],
@@ -276,8 +298,9 @@ function planFetch(
     if (readCommit(current) !== undefined) queue.push([current, 0]);
     else if (readObject(current) !== undefined) extraObjects.add(current);
   }
-  while (queue.length > 0) {
-    const [sha, generation] = queue.shift() as [string, number];
+  let queueHead = 0;
+  while (queueHead < queue.length) {
+    const [sha, generation] = queue[queueHead++] as [string, number];
     if (included.has(sha) && (included.get(sha) as number) <= generation) continue;
     if (depth !== null && generation >= depth) continue;
     included.set(sha, generation);

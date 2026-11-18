@@ -118,8 +118,18 @@ export function writeTree(entries: TreeEntry[]): string {
   return writeObject('tree', encodeTree(entries));
 }
 
-/** Every file under a tree, as path -> {sha, mode}; the empty tree flattens to empty. */
+const flatCache = new Map<string, Map<string, { sha: string; mode: string }>>();
+
+/**
+ * Every file under a tree, as path -> {sha, mode}; the empty tree flattens to empty.
+ * Trees are immutable, so a root flattening is cached and shared; callers that need
+ * to mutate the map must copy it first (commitFiles does).
+ */
 export function flattenTree(treeSha: string, prefix = ''): Map<string, { sha: string; mode: string }> {
+  if (prefix === '') {
+    const cached = flatCache.get(treeSha);
+    if (cached !== undefined) return cached;
+  }
   const out = new Map<string, { sha: string; mode: string }>();
   const object = readObject(treeSha);
   if (object === undefined || object.type !== 'tree') return out;
@@ -131,6 +141,7 @@ export function flattenTree(treeSha: string, prefix = ''): Map<string, { sha: st
       out.set(path, { sha: entry.sha, mode: entry.mode });
     }
   }
+  if (prefix === '') flatCache.set(treeSha, out);
   return out;
 }
 
@@ -200,9 +211,18 @@ export function parseCommit(payload: Buffer): Commit {
   return commit;
 }
 
+const commitCache = new Map<string, Commit>();
+
+/** Parse a commit once and keep it: commits are immutable, and every surface re-reads them. */
 export function readCommit(sha: string): Commit | undefined {
-  const object = readObject(sha);
-  return object !== undefined && object.type === 'commit' ? parseCommit(object.payload) : undefined;
+  const key = sha.toLowerCase();
+  const cached = commitCache.get(key);
+  if (cached !== undefined) return cached;
+  const object = readObject(key);
+  if (object === undefined || object.type !== 'commit') return undefined;
+  const commit = parseCommit(object.payload);
+  commitCache.set(key, commit);
+  return commit;
 }
 
 /** The tree a commit points at. */
@@ -215,8 +235,9 @@ export function walkHistory(tip: string, limit = 10_000): string[] {
   const seen = new Set<string>();
   const order: string[] = [];
   const queue: string[] = [tip];
-  while (queue.length > 0 && order.length < limit) {
-    const sha = queue.shift() as string;
+  let head = 0;
+  while (head < queue.length && order.length < limit) {
+    const sha = queue[head++] as string;
     if (seen.has(sha)) continue;
     const commit = readCommit(sha);
     if (commit === undefined) continue;
@@ -231,8 +252,9 @@ export function walkHistory(tip: string, limit = 10_000): string[] {
 export function ancestorsOf(tip: string): Map<string, number> {
   const distances = new Map<string, number>();
   const queue: Array<[string, number]> = [[tip, 0]];
-  while (queue.length > 0) {
-    const [sha, distance] = queue.shift() as [string, number];
+  let head = 0;
+  while (head < queue.length) {
+    const [sha, distance] = queue[head++] as [string, number];
     if (distances.has(sha) && (distances.get(sha) as number) <= distance) continue;
     const commit = readCommit(sha);
     if (commit === undefined) continue;

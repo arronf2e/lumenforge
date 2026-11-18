@@ -21,9 +21,15 @@ export function tick(): number {
   return EPOCH_SEC + clockSeq;
 }
 
-/** An ISO timestamp for the logical second `sec`. */
+const isoCache = new Map<number, string>();
+
+/** An ISO timestamp for the logical second `sec` (cached: list endpoints repeat seconds heavily). */
 export function iso(sec: number): string {
-  return new Date(sec * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const cached = isoCache.get(sec);
+  if (cached !== undefined) return cached;
+  const text = new Date(sec * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  isoCache.set(sec, text);
+  return text;
 }
 
 /** A git author/committer line for the viewer at logical second `sec`. */
@@ -157,7 +163,8 @@ export function commitFiles(
   message: string,
 ): string {
   const parent = branchTip(repo, branch);
-  const files = filesAt(parent);
+  // Copy before mutating: filesAt may hand back a cached, shared flattening.
+  const files = new Map(filesAt(parent));
   for (const change of changes) {
     if (change.content === null) files.delete(change.path);
     else files.set(change.path, { sha: writeBlob(change.content), mode: '100644' });

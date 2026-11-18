@@ -11,6 +11,22 @@ import { hashObject, readObject, writeObject, type ObjectType } from './gitobj.t
 const TYPE_CODE: Record<ObjectType, number> = { commit: 1, tree: 2, blob: 3, tag: 4 };
 const CODE_TYPE: Record<number, ObjectType> = { 1: 'commit', 2: 'tree', 3: 'blob', 4: 'tag' };
 
+const packEntryCache = new Map<string, Buffer>();
+
+/** One object's pack entry (header + deflated payload); objects are immutable, so cache it. */
+function packEntry(sha: string): Buffer {
+  const cached = packEntryCache.get(sha);
+  if (cached !== undefined) return cached;
+  const object = readObject(sha);
+  if (object === undefined) throw new Error(`pack builder asked for missing object ${sha}`);
+  const entry = Buffer.concat([
+    encodePackHeader(TYPE_CODE[object.type], object.payload.length),
+    deflateSync(object.payload),
+  ]);
+  packEntryCache.set(sha, entry);
+  return entry;
+}
+
 /** Build a pack from objects already in the store, in the order given. */
 export function buildPack(shas: string[]): Buffer {
   const parts: Buffer[] = [];
@@ -19,12 +35,7 @@ export function buildPack(shas: string[]): Buffer {
   header.writeUInt32BE(2, 4);
   header.writeUInt32BE(shas.length, 8);
   parts.push(header);
-  for (const sha of shas) {
-    const object = readObject(sha);
-    if (object === undefined) throw new Error(`pack builder asked for missing object ${sha}`);
-    parts.push(encodePackHeader(TYPE_CODE[object.type], object.payload.length));
-    parts.push(deflateSync(object.payload));
-  }
+  for (const sha of shas) parts.push(packEntry(sha));
   const body = Buffer.concat(parts);
   return Buffer.concat([body, createHash('sha1').update(body).digest()]);
 }
@@ -179,6 +190,15 @@ export async function parsePack(buffer: Buffer): Promise<ParsedPack> {
   }
   if (offset !== end) throw new Error('pack has stray bytes before its trailer');
 
+  // REF_DELTA bases are plain entries named by sha: index them once instead of
+  // re-hashing every plain entry for every delta.
+  const plainBySha = new Map<string, Raw>();
+  for (const entry of raw) {
+    if (entry.typeCode !== 6 && entry.typeCode !== 7) {
+      plainBySha.set(hashObject(CODE_TYPE[entry.typeCode] as ObjectType, entry.data), entry);
+    }
+  }
+
   const objects = new Map<string, { type: ObjectType; payload: Buffer }>();
   const resolvedByOffset = new Map<number, { type: ObjectType; payload: Buffer; sha: string }>();
   const resolve = (entry: Raw): { type: ObjectType; payload: Buffer; sha: string } => {
@@ -194,14 +214,8 @@ export async function parsePack(buffer: Buffer): Promise<ParsedPack> {
       payload = applyDelta(base.payload, entry.data);
     } else if (entry.typeCode === 7) {
       let base: { type: ObjectType; payload: Buffer } | undefined;
-      for (const candidate of raw) {
-        if (candidate.typeCode !== 6 && candidate.typeCode !== 7) {
-          if (hashObject(CODE_TYPE[candidate.typeCode] as ObjectType, candidate.data) === entry.baseOid) {
-            base = resolve(candidate);
-            break;
-          }
-        }
-      }
+      const candidate = plainBySha.get(entry.baseOid as string);
+      if (candidate !== undefined) base = resolve(candidate);
       if (base === undefined) {
         const stored = readObject(entry.baseOid as string);
         if (stored === undefined) throw new Error('ref-delta base is neither in the pack nor held');
@@ -225,9 +239,7 @@ export async function parsePack(buffer: Buffer): Promise<ParsedPack> {
   return { objects };
 }
 
-/** Commit a parsed pack's objects into the store. */
+/** Commit a parsed pack's objects into the store (writeObject already no-ops on a dupe). */
 export function storePack(parsed: ParsedPack): void {
-  for (const [sha, object] of parsed.objects) {
-    if (readObject(sha) === undefined) writeObject(object.type, object.payload);
-  }
+  for (const [, object] of parsed.objects) writeObject(object.type, object.payload);
 }
